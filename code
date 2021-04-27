@@ -1,0 +1,436 @@
+library("sqldf")
+library("tidyr")
+library("dplyr")
+library("stringr")
+library("ggplot2")
+library("ggmap")
+library("rgdal")
+library("sf")
+library("tmap")
+library("plotly")
+
+setwd("/Users/vincentllx/Desktop/02-Logiciels Statistiques/Projet/R")
+
+mvmt=read.csv("estimationprojectionuniquedonneesouvertes.csv")
+shaperss=st_read("/Users/vincentllx/Desktop/02-Logiciels Statistiques/Projet/R/Territoires_RSS_2020/Territoires_RSS_2020.shp")
+shapeclsc=st_read("/Users/vincentllx/Desktop/02-Logiciels Statistiques/Projet/R/Territoires_CLSC_2020/Territoires_CLSC_2020.shp")
+
+#analyse exploratoire
+unique(mvmt$NiveauGeographique)
+unique(mvmt$Territoire)
+summary(mvmt)
+
+#on veut connaitre le nombre de districts
+
+# aggregate(clsc_base$Annee, by = list(clsc_base$NiveauGeographique), FUN = length)
+# TEST4=aggregate(clsc_base$Annee, by = list(clsc_base$Annee), FUN = length)
+# TEST5=aggregate(feed ~ feed, data = chickwts, FUN = length) # Equivalent
+
+
+
+#on filtre notre table sur le niveau géographique le plus granulaire : CLSC
+
+clsc_base=subset(mvmt,mvmt$NiveauGeographique=="CLSC")
+clsc_base$RSS_code=substr(clsc_base$Territoire,1,2)
+clsc_base$RTS_code=substr(clsc_base$Territoire,1,3)
+clsc_base$RLS_code=substr(clsc_base$Territoire,1,4)
+clsc_base$CLSC_code=substr(clsc_base$Territoire,1,5)
+
+#syntaxe de la fonction agregate()
+clsc_base_T=subset(clsc_base,clsc_base$Sexe=="Total")
+test=aggregate(clsc_base_T$TousLesAges~clsc_base_T$Territoire, 
+               FUN=mean, 
+               na.rm = TRUE) # On perd le titre des colonnes + on a beaucoup de décimales
+colnames(test)=c("Territoire","Population")
+test=aggregate(clsc_base_T$TousLesAges,list(clsc_base_T$Territoire),function(x) round(mean(x,0))) #utiliser list() nous permets d'executer une fonction qui prend cette fois la moyenne et son arrondie
+test=aggregate(clsc_base$TousLesAges,list(Territoire=clsc_base$Territoire, Sexe=clsc_base$Sexe=="Total"),function(x) round(mean(x,0))) #utiliser list() nous permets de selectionner les observations de notre colonne SEXE
+
+test=aggregate(cbind(TousLesAges,X30),Territoire+Sexe, data=clsc_base, FUN=mean, na.rm = TRUE) # On guarde le titre des colonnes
+test=aggregate(cbind(TousLesAges,X30), by=list(Territoire+Sexe), data=clsc_base, FUN=mean, na.rm = TRUE) # On guarde le titre des colonnes
+
+# aggregate(clsc_base$TousLesAges, by=list(clsc_base$Territoire, clsc_base$Sexe), FUN=mean, na.rm = TRUE) # On perd le titre des colonnes
+# aggregate(cbind(clsc_base$TousLesAges,clsc_base$X30), by=list(clsc_base$Territoire, clsc_base$Sexe), FUN=mean, na.rm = TRUE) # On perd le titre des colonnes
+# aggregate(cbind(TousLesAges,X30), by=list(Territoire, Sexe), data=clsc_base, FUN=mean, na.rm = TRUE) # R ne parvient pas à identifier les colonnes
+
+#avantage d'utiliser list()
+# aggregate(clsc_base$TousLesAges, by=list(RSS=substr(clsc_base$Territoire,1,2), Genre=(clsc_base$Sexe=="Total")), FUN=mean)
+
+#autres fonctions d'aggrégations disponibles
+aggregate(clsc_base_T$TousLesAges, by=list(RSS=substr(clsc_base_T$Territoire,1,2)), FUN=quantile, probs=c(0.05,0.95))
+
+#obtenir des resultats utiles : ici nombre de clsc par rss
+CLSCparRSS=aggregate(clsc_base_T$TousLesAges, by=list(RSS=substr(clsc_base_T$Territoire,1,2), Annee=clsc_base_T$Annee), FUN=length)
+
+#personnaliser la fonction
+#second largest value of each group is returned, or the largest if the group has only one case
+second = function(x) {
+  if (length(x) == 1)
+    return(x)
+  return(sort(x, decreasing = TRUE)[2])}
+
+agg = aggregate(clsc_base$TousLesAges,
+                by = list(clsc_base$Territoire, clsc_base$Sexe),
+                FUN = second)
+
+
+##############
+#autre librairie
+
+test=sqldf("select RSS_code, avg(TousLesAges) from clsc_base group by RSS_code")
+test=sqldf("select distinct RSS_code, count(distinct RTS_code) as RTS_code, count(distinct RLS_code) as RLS_code, count(distinct CLSC_code) as CLSC_code from clsc_base group by RSS_code, Annee")
+test=sqldf("select distinct RSS_code, count(distinct RTS_code) from clsc_base group by RSS_code, Annee")
+
+##############
+#dplyr
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise(test=range(TousLesAges))
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise(tibble(min=min(TousLesAges),max=max(TousLesAges),moyenne=mean(TousLesAges),total=sum(TousLesAges)))
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise(x = quantile(TousLesAges, c(0.25, 0.5, 0.75)), q = c(0.25, 0.5, 0.75))
+
+#function
+quibble2 <- function(x, q = c(0.25, 0.5, 0.75)) {
+  tibble("{{ x }}" := quantile(x, q), "{{ x }}_q" := q)
+}
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise(quibble2(TousLesAges, c(0.25, 0.5, 0.75)))
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise(across(everything(), list(mean)))
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise_all(.funs = c(mean="mean"))
+
+Quebec= clsc_base %>%
+  select(CLSC_code,RLS_code,RTS_code,RSS_code, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(Sexe=="Total") %>%
+  group_by(Annee) %>%
+  summarise_if(.predicate = function(x) is.numeric(x),
+               .funs = funs(mean="mean"))
+
+
+
+
+#on aggrege notre table sur le niveau géographique le plus haut : Québec
+# quebec=aggregate(cbind(clsc_base$TousLesAges)~clsc_base$Annee+clsc_base$Sexe, FUN=sum, na.rm = TRUE)
+# colnames(quebec)=c("Annee","Sexe","Population")
+
+# #homme
+# quebec_homme=subset(clsc_base,clsc_base$Sexe=="Masculin")
+# quebec_homme=aggregate(cbind(quebec_homme$TousLesAges)~quebec_homme$Annee, FUN=sum, na.rm = TRUE)
+# colnames(quebec_homme)=c("Annee","Population")
+# 
+# #femme
+# quebec_femme=subset(clsc_base,clsc_base$Sexe=="Féminin")
+# quebec_femme=aggregate(cbind(quebec_femme$TousLesAges)~quebec_femme$Annee, FUN=sum, na.rm = TRUE)
+# colnames(quebec_femme)=c("Annee","Population")
+# 
+# #total
+# quebec_total=subset(clsc_base,clsc_base$Sexe=="Total")
+# quebec_total=aggregate(cbind(quebec_total$TousLesAges)~quebec_total$Annee, FUN=sum, na.rm = TRUE)
+# colnames(quebec_total)=c("Annee","Population")
+# 
+# #ratio homme femme par année au QC
+# quebec_ratio=inner_join(quebec_homme,quebec_femme,by="Annee")
+# colnames(quebec_ratio)=c("Annee","Population_homme","Population_femme")
+# quebec_ratio$ratio=quebec_ratio$Population_homme/(quebec_ratio$Population_femme+quebec_ratio$Population_homme)
+
+
+#frustrant de ne pas pouvoir agréger tous les ages, cela prendrai trop de temps (101 variables), on perd beaucoup d'info
+
+
+#notre mission désormais c'est d'aggréger nos données sur un niveau plus granulaire
+
+
+rss=clsc_base
+rss$RSS_code=substr(rss$Territoire,1,2)
+rss=aggregate(cbind(rss$TousLesAges)~rss$Annee+rss$RSS_code+rss$Sexe, FUN=sum, na.rm = TRUE)
+colnames(rss)=c("Annee","RSS_code","Sexe","Population")
+
+rss_homme=subset(rss,rss$Sexe=="Masculin")
+rss_homme=aggregate(cbind(rss_homme$Population)~rss_homme$Annee+rss_homme$RSS_code, FUN=sum, na.rm = TRUE)
+colnames(rss_homme)=c("Annee","RSS_code","Population")
+
+rss_femme=subset(rss,rss$Sexe=="Féminin")
+rss_femme=aggregate(cbind(rss_femme$Population)~rss_femme$Annee+rss_femme$RSS_code, FUN=sum, na.rm = TRUE)
+colnames(rss_femme)=c("Annee","RSS_code","Population")
+
+rss_total=subset(rss,rss$Sexe=="Total")
+rss_total=aggregate(cbind(rss_total$Population)~rss_total$Annee+rss_total$RSS_code, FUN=sum, na.rm = TRUE)
+colnames(rss_total)=c("Annee","RSS_code","Population")
+
+rss_ratio=inner_join(rss_homme,rss_femme,by=c("Annee","RSS_code"))
+colnames(rss_ratio)=c("Annee","RSS_code","Population_homme","Population_femme")
+rss_ratio$ratio=rss_ratio$Population_homme/(rss_ratio$Population_femme+rss_ratio$Population_homme)
+
+rssjoin <- rss_ratio %>% 
+  inner_join(rss_total, by = c("RSS_code", "Annee"))
+
+################################
+################################
+
+#on veut créer une table par an
+# transpo = rss_total %>% 
+#   spread(key="Annee", value="Population")
+# transpo = rss_ratio %>% 
+#   spread(key="Annee", value="ratio")
+
+rssshp <- shaperss %>% 
+  select(RSS_code,Etiquette,Shape_Leng,Shape_Area,geometry)
+nrow(rssshp)
+# clscshp <- shapeclsc %>% 
+#   select(RSS_code,Etiquette,Shape_Leng,Shape_Area,geometry)
+# nrow(rssshp)
+
+# rssshp1 = inner_join(rssjoin,rssshp)#ne fonctionne pas
+
+rssshp1=rssjoin%>%
+  filter(Annee==c(2010))
+
+rssshp1 = inner_join(rssshp,rssshp1)
+
+
+#GGPLOT
+
+
+ggplot(data=rssshp1)
+
+ggplot() + 
+  geom_sf(data = rssshp1)
+
+ggplot(data=rssshp1)+
+  geom_sf(aes(fill=RSS_code)) + 
+  theme_bw()
+
+ggplot(data=rssshp1) +
+  geom_sf(aes(fill=Population))
+
+ggplot(data=rssshp1) +
+  geom_sf(aes(fill=Population)) +
+  scale_fill_gradient (low= "#56B4E9", high= "#E69F00") +
+  coord_sf(xlim = c(-76, -70), ylim = c(45, 50))
+
+mrc_proj <- st_transform(rssshp1, crs = 4269)
+st_crs(mrc_proj)
+
+ggplot(data = mrc_proj) +
+  geom_sf(aes(fill = Population)) +
+  geom_sf_label(aes(label = Etiquette),label.size = 0.1)
+  coord_sf(xlim = c(-75, -70), ylim = c(45, 47))
+
+ggplot(data = mrc_proj) +
+  geom_sf(aes(fill = Population)) +
+  scale_fill_gradient (low= "#56B4E9", high= "#E69F00") +
+  geom_sf_label(aes(label = Etiquette),label.size = 0.1) +
+  coord_sf(xlim = c(-75, -70), ylim = c(45, 47)) +
+  annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2)
+
+# ggplot(data=test) +
+#   geom_sf(aes(fill=Population)) +
+#   scale_fill_gradient (low= "#56B4E9", high= "#E69F00") +
+#   #annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2)
+# 
+# ggplot(data = rssshp1) +
+#   geom_sf(aes(fill = Population)) +
+#   scale_fill_gradient (low= "#56B4E9", high= "#E69F00") +
+#   geom_sf_label(aes(label = Etiquette),label.size = 0.1) +
+  #annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2)
+
+#   coord_sf(xlim = c(-76, -70),ylim = c(45, 50))
+
+# disp_win_wgs84 <- st_sfc(st_point( c(-76, -70), ylim = c(45, 50)),
+#                          crs = 4326)
+# disp_win_wgs84 <- st_sfc(st_point(c(-76, -70)), st_point(c(45, 50)),
+#                          crs = 4326)
+# 
+# 
+# disp_win_trans <- st_transform(disp_win_wgs84, crs = target_crs)
+# 
+# disp_win_coord <- st_coordinates(disp_win_trans)
+# 
+# ggplot() + geom_sf(data = test) +
+#   coord_sf(xlim = disp_win_coord[,'X'], ylim = disp_win_coord[,'Y'],
+#            datum = target_crs, expand = FALSE) +
+#   theme_bw()
+
+# ggplot(data=test) +
+#   geom_sf(aes(fill=Population)) +
+#   scale_fill_gradient (low= "#56B4E9", high= "#E69F00") +
+#   coord_sf(xlim = c(-76, -70),ylim = c(48, 50))
+# 
+# 
+# 
+# 
+# ggplot(data = rssshp2) + 
+#   geom_sf(aes(fill = Population)) +
+#   geom_sf_label(aes(label = Etiquette),label.size = 0.1) +
+#   annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2)
+# 
+# ggplot(data = rssshp2) + 
+#   geom_sf(aes(fill = Population)) +
+#   geom_sf_label(aes(label = Etiquette),label.size = 0.1) +
+#   annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2)
+# #coord_sf(xlim = c(-76, -67), ylim = c(45, 50),expand = FALSE)
+# #coord_sf(crs = st_crs(3035))
+# 
+# ggplot(data = rssshp2) + 
+#   geom_sf(aes(fill = Population)) +
+#   #geom_sf_label(aes(label = Etiquette),label.size = 0.1) +
+#   #annotate("point", x = -73.5, y = 45.5, colour = "red", size = 2) +
+#   coord_sf(xlim = c(-76, -67), ylim = c(45, 50))
+
+#TMAP
+tmap_mode("plot")
+tm_shape(rssshp1)+
+  tm_polygons(id="RSS_code")
+
+tmap_mode("view")
+tm_shape(rssshp1) +
+  tm_polygons("Population", id="RSS_code", palette="Oranges")
+
+tmap_last()
+
+
+#PLOTLY
+# plot_geo(rssshp1, locationmode="Quebec") %>% #, frame=~Annee) %>%
+#   add_trace(locations=~RSS_code, z=~Population, color=Population)
+
+#plot_geo(rssshp1, locationmode="Quebec")#, frame=~population)
+
+#plot_ly(rssshp, split = ~RSS_code)
+plot_ly(rssshp1, 
+        split = ~RSS_code, 
+        color= ~Population,
+        showlegend=FALSE)
+
+plot_geo(rssshp1,
+         locationmode="Quebec",
+         frame= ~Annee)
+
+plot_ly(rssshp1, 
+        split = ~RSS_code, 
+        color= ~Population,
+        frame= ~Annee,
+        showlegend=FALSE)
+
+# plot_geo(rssshp1, 
+#         split = ~RSS_code, 
+#         color= ~Population,
+#         frame= ~Annee,
+#         showlegend=FALSE)
+
+
+
+################################
+################################
+################################
+################################
+rssshp <- shaperss %>% 
+  select(RSS_code,Etiquette,Shape_Leng,Shape_Area,geometry)
+nrow(rssshp)
+
+rssshp = inner_join(x=rssshp,y=rss_total,by=x.RSS_code)
+
+ggplot(data=rssshp) + #, aes(geometry = geometry)) +
+  geom_sf(aes(fill=Population))
+
+ggplot(data=rssshp4) + #, aes(geometry = geometry)) +
+  geom_sf(aes(fill=rssshp4$"1996"))
+
+tm_shape(rssshp4) +
+  tm_polygons("rssshp4$1996", id="RSS_code", palette="Greens")
+tmap_mode("view")
+tmap_last()
+
+ggmap(rssshp)
+
+# 
+# #transposition
+# mensuelles_trim <- RSS %>% 
+#   spread(key="Annee", value="Population")
+
+#on veut mtnt avoir plus de détaille sur la répartitions selon les générations au québec
+
+#agregations
+RSS3 = mvmt %>%
+  select(NiveauGeographique,Territoire, Annee, Sexe, TousLesAges, c(9:99)) %>%
+  filter(NiveauGeographique=="RSS", Sexe=="Total") %>%
+  mutate(idCLSC=str_sub(Territoire,0,2))%>%
+  mutate(Territoire=str_sub(Territoire,4,-1))%>%
+  arrange(Territoire,Annee)
+
+#addition des colonnes
+RSS4 = RSS3 %>%
+  mutate(gen1=rowSums(.[6:30]))%>%
+  mutate(gen2=rowSums(.[31:55]))%>%
+  mutate(gen3=rowSums(.[56:70]))%>%
+  mutate(gen4=rowSums(.[71:96])) %>%
+  select(-c(6:96),-Sexe) %>%
+  filter(Annee=="2010") %>%
+  rename(RSS_code=idCLSC)
+
+rssshp5 = inner_join(rssshp,RSS4)
+rssshp6=rssshp5%>%
+  mutate(density=TousLesAges/Shape_Leng)
+
+ggplot(data=rssshp6) + #, aes(geometry = geometry)) +
+  geom_sf(aes(fill=density))
+
+#, by="RSS_code")#, suffix=c("idRSS.RSS2","RSScode.rssshp"))
+# ggplot() +
+#   geom_sf(data = rssshp3) +
+#   ggtitle("TEST") +
+#   coord_sf()
+
+# ggplot(data=rssshp3, aes(geometry = geometry)) +
+#   geom_sf(aes(fill=Population))
+# quebec_total$Annee=as.Date(quebec_total$Annee,format="%Y")
+# dat <- aggregate(quebec_total ~ month(index(Annee)), FUN = quantile, probs = c(0.05, 0.95))
+# colnames(dat)[1] <- "YEAR"
+# dat
+# year
+
+# ?aggregate.sf
+# ?aggregate.Spatial
+# ?aggregate.data.frame
+# ?aggregate
+# 
+# aggregate(TousLesAges ~ CodeTerritoire ,data=mvmt, FUN = mean, subset=CodeTerritoire)
+
+
+# second = function(x) {
+#   if (length(x) == 1)
+#     return(x)
+#   return(sort(x, decreasing = TRUE)[2])}
+# 
+# agg = aggregate(data, by = list(data$Role, data$Shift), FUN = second)
+
+# TEST1 = aggregate(clsc_base$TousLesAges, list(clsc_base$CodeTerritoire), mean) # On perd le titre des colonnes : note différent que vu en cours
+# TEST2 = aggregate(TousLesAges ~ CodeTerritoire+Annee, data = clsc_base, mean) # On ne perd pas le titre des colonnes
+# #TEST3 = aggregate(TousLesAges ~ CodeTerritoire+Annee, data = clsc_base, fun=) # Essayer de faire une fonction
+# 
+# #prendre conscience de la répartition des régions
+# aggregate(mvmt$NiveauGeographique, by = list(mvmt$NiveauGeographique,mvmt$Annee,mvmt$Sexe), FUN = length)
